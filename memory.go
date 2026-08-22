@@ -9,10 +9,33 @@ import (
 // maxCStringLen bounds GoStringAt so a missing terminator cannot walk forever.
 const maxCStringLen = 1 << 20
 
-// Memory handed out by Alloc is a Go byte slice kept alive in the bridge, and
-// its address is handed to the sandbox directly. This is the same arrangement
-// purego itself uses when passing Go buffers to C, and it relies on the Go
-// garbage collector not moving heap objects.
+// Memory handed out by Alloc is a Go byte slice kept alive in the bridge. Host
+// operations resolve its address back to that slice; only addresses owned by
+// native code are accessed through unsafe.Pointer.
+
+// ownedBlockLocked returns the part of a bridge-owned block starting at addr.
+// The caller must hold b.mu while using the returned slice.
+func (b *Bridge) ownedBlockLocked(addr uintptr) ([]byte, bool) {
+	for base, buf := range b.blocks {
+		if addr >= base {
+			off := addr - base
+			if off < uintptr(len(buf)) {
+				return buf[int(off):], true
+			}
+		}
+	}
+	return nil, false
+}
+
+// foreignBytes converts an address owned by native code to a byte slice. Such
+// memory is not owned or moved by the Go garbage collector, but the compiler
+// cannot recover that provenance from a uintptr. Invalid addresses may still
+// crash, as documented by Peek and Poke.
+//
+//go:nocheckptr
+func foreignBytes(addr uintptr, n int) []byte {
+	return unsafe.Slice((*byte)(unsafe.Pointer(addr)), n)
+}
 
 func (b *Bridge) block(addr uintptr) ([]byte, error) {
 	b.mu.Lock()
@@ -128,8 +151,19 @@ func (b *Bridge) Peek(addr uintptr, n int) ([]byte, error) {
 	if n < 0 {
 		return nil, fmt.Errorf("ffibridge: negative peek length %d", n)
 	}
+	b.mu.Lock()
+	if buf, ok := b.ownedBlockLocked(addr); ok {
+		defer b.mu.Unlock()
+		if n > len(buf) {
+			return nil, fmt.Errorf("ffibridge: peek of %d bytes exceeds the %d bytes remaining in a bridge-owned block", n, len(buf))
+		}
+		out := make([]byte, n)
+		copy(out, buf[:n])
+		return out, nil
+	}
+	b.mu.Unlock()
 	out := make([]byte, n)
-	copy(out, unsafe.Slice((*byte)(unsafe.Pointer(addr)), n))
+	copy(out, foreignBytes(addr, n))
 	return out, nil
 }
 
@@ -141,7 +175,17 @@ func (b *Bridge) Poke(addr uintptr, data []byte) error {
 	if addr == 0 {
 		return errors.New("ffibridge: poke at a null address")
 	}
-	copy(unsafe.Slice((*byte)(unsafe.Pointer(addr)), len(data)), data)
+	b.mu.Lock()
+	if buf, ok := b.ownedBlockLocked(addr); ok {
+		defer b.mu.Unlock()
+		if len(data) > len(buf) {
+			return fmt.Errorf("ffibridge: poke of %d bytes exceeds the %d bytes remaining in a bridge-owned block", len(data), len(buf))
+		}
+		copy(buf, data)
+		return nil
+	}
+	b.mu.Unlock()
+	copy(foreignBytes(addr, len(data)), data)
 	return nil
 }
 
@@ -153,10 +197,28 @@ func (b *Bridge) GoStringAt(addr uintptr) (string, error) {
 	if addr == 0 {
 		return "", nil
 	}
-	base := unsafe.Pointer(addr)
+	b.mu.Lock()
+	if buf, ok := b.ownedBlockLocked(addr); ok {
+		defer b.mu.Unlock()
+		limit := len(buf)
+		if limit > maxCStringLen {
+			limit = maxCStringLen
+		}
+		for length := 0; length < limit; length++ {
+			if buf[length] == 0 {
+				return string(buf[:length]), nil
+			}
+		}
+		if len(buf) < maxCStringLen {
+			return "", fmt.Errorf("ffibridge: no NUL terminator before the end of the bridge-owned block at %#x", addr)
+		}
+		return "", fmt.Errorf("ffibridge: no NUL terminator within %d bytes at %#x", maxCStringLen, addr)
+	}
+	b.mu.Unlock()
+	buf := foreignBytes(addr, maxCStringLen)
 	length := 0
 	for length < maxCStringLen {
-		if *(*byte)(unsafe.Add(base, length)) == 0 {
+		if buf[length] == 0 {
 			break
 		}
 		length++
@@ -164,5 +226,5 @@ func (b *Bridge) GoStringAt(addr uintptr) (string, error) {
 	if length >= maxCStringLen {
 		return "", fmt.Errorf("ffibridge: no NUL terminator within %d bytes at %#x", maxCStringLen, addr)
 	}
-	return string(unsafe.Slice((*byte)(base), length)), nil
+	return string(buf[:length]), nil
 }

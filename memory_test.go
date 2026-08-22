@@ -61,22 +61,52 @@ func TestPeekPoke(t *testing.T) {
 	b := New(Options{})
 	defer b.Close()
 
-	addr, err := b.Alloc(8)
+	addr, err := b.Alloc(12)
 	if err != nil {
 		t.Fatalf("Alloc: %v", err)
 	}
-	if err := b.Poke(addr, []byte{1, 2, 3}); err != nil {
+	addr += 4
+	if err := b.Poke(addr, []byte("hello\x00")); err != nil {
 		t.Fatalf("Poke: %v", err)
 	}
-	got, err := b.Peek(addr, 3)
+	got, err := b.Peek(addr, 5)
 	if err != nil {
 		t.Fatalf("Peek: %v", err)
 	}
-	if got[0] != 1 || got[1] != 2 || got[2] != 3 {
-		t.Fatalf("Peek = %v, want [1 2 3]", got)
+	if string(got) != "hello" {
+		t.Fatalf("Peek = %q, want \"hello\"", got)
+	}
+	str, err := b.GoStringAt(addr)
+	if err != nil {
+		t.Fatalf("GoStringAt: %v", err)
+	}
+	if str != "hello" {
+		t.Fatalf("GoStringAt = %q, want \"hello\"", str)
+	}
+	if _, err := b.Peek(addr, 9); err == nil {
+		t.Error("Peek past the end of a bridge-owned block was allowed")
+	}
+	if err := b.Poke(addr, make([]byte, 9)); err == nil {
+		t.Error("Poke past the end of a bridge-owned block was allowed")
 	}
 	if _, err := b.Peek(0, 4); err == nil {
 		t.Error("Peek at a null address was allowed")
+	}
+}
+
+func TestGoStringAtStopsAtOwnedBlockEnd(t *testing.T) {
+	b := New(Options{})
+	defer b.Close()
+
+	addr, err := b.Alloc(4)
+	if err != nil {
+		t.Fatalf("Alloc: %v", err)
+	}
+	if err := b.Poke(addr, []byte("text")); err != nil {
+		t.Fatalf("Poke: %v", err)
+	}
+	if _, err := b.GoStringAt(addr + 2); err == nil {
+		t.Error("GoStringAt read past the end of a bridge-owned block")
 	}
 }
 
