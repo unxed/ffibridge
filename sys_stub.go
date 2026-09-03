@@ -1,4 +1,4 @@
-//go:build noffi || !(linux || android || darwin || freebsd || windows) || arm
+//go:build noffi || (!windows && (!(linux || android || darwin || freebsd) || (!amd64 && !arm64)))
 
 package ffibridge
 

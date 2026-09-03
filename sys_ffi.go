@@ -1,4 +1,4 @@
-//go:build !noffi && (linux || android || darwin || freebsd || windows) && !arm
+//go:build !noffi && (windows || ((linux || android || darwin || freebsd) && (amd64 || arm64)))
 
 package ffibridge
 
@@ -12,6 +12,13 @@ import (
 // Supported reports whether this build can make native calls. Building with
 // the noffi tag, or on a platform pureffi does not cover, leaves the rest of
 // the plugin machinery intact and only disables the escape hatch.
+//
+// The constraint above tracks the targets pureffi's ffi layer actually has an
+// implementation for: Windows on any architecture, and Linux, Android, macOS
+// or FreeBSD on amd64/arm64. Excluding only "arm" was not enough --
+// that still let linux/386, linux/riscv64 and the mips/ppc64 targets in, where
+// ffi does not build at all and the import failed the whole binary rather
+// than falling back to the stub below.
 const Supported = true
 
 func dlOpen(name string) (uintptr, error) {
