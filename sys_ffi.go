@@ -1,4 +1,4 @@
-//go:build !noffi && (windows || ((linux || android || darwin || freebsd) && (amd64 || arm64)))
+//go:build !noffi && (windows || ((linux || android || darwin || freebsd || netbsd) && (amd64 || arm64)))
 
 package ffibridge
 
@@ -14,8 +14,8 @@ import (
 // the plugin machinery intact and only disables the escape hatch.
 //
 // The constraint above tracks the targets pureffi's ffi layer actually has an
-// implementation for: Windows on any architecture, and Linux, Android, macOS
-// or FreeBSD on amd64/arm64. Excluding only "arm" was not enough --
+// implementation for: Windows on any architecture, and Linux, Android, macOS,
+// FreeBSD or NetBSD on amd64/arm64. Excluding only "arm" was not enough --
 // that still let linux/386, linux/riscv64 and the mips/ppc64 targets in, where
 // ffi does not build at all and the import failed the whole binary rather
 // than falling back to the stub below.
